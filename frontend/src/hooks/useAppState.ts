@@ -6,6 +6,8 @@ import { AppState, ConfigData, OutlineData } from '../types';
 import { draftStorage } from '../utils/draftStorage';
 
 const initialState: AppState = {
+  uiMode: 'steps',
+  localDbView: 'dbFiles',
   currentStep: 0,
   config: {
     api_key: '',
@@ -92,6 +94,28 @@ export const useAppState = () => {
     setState(initialState);
   }, []);
 
+  const openLocalDb = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      uiMode: 'localDb',
+      localDbView: 'dbFiles',
+    }));
+  }, []);
+
+  const backToSteps = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      uiMode: 'steps',
+    }));
+  }, []);
+
+  const setLocalDbView = useCallback((view: AppState['localDbView']) => {
+    setState((prev) => ({
+      ...prev,
+      localDbView: view,
+    }));
+  }, []);
+
   return {
     state,
     updateConfig,
@@ -102,5 +126,8 @@ export const useAppState = () => {
     nextStep,
     prevStep,
     resetState,
+    openLocalDb,
+    backToSteps,
+    setLocalDbView,
   };
 };

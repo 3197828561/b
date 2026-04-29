@@ -40,6 +40,37 @@ class FileUploadResponse(BaseModel):
     old_outline: Optional[str] = None
 
 
+class LocalDbFileUploadResponse(BaseModel):
+    """公司本地数据库文件上传响应"""
+
+    success: bool
+    message: str
+    file_path: Optional[str] = None
+
+
+class LocalDbFileInfo(BaseModel):
+    """公司本地数据库中文件信息"""
+
+    name: str
+    size_bytes: int
+    mtime: str
+
+
+class LocalDbFileListResponse(BaseModel):
+    """公司本地数据库文件列表响应"""
+
+    success: bool
+    message: str
+    files: List[LocalDbFileInfo] = Field(default_factory=list)
+
+
+class LocalDbFileActionResponse(BaseModel):
+    """公司本地数据库文件操作（删除/保存等）响应"""
+
+    success: bool
+    message: str
+
+
 class AnalysisType(str, Enum):
     """分析类型"""
 

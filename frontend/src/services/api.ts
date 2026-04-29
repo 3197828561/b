@@ -258,4 +258,86 @@ export const expandApi = {
   },
 };
 
+export interface LocalDbFileUploadResponse {
+  success: boolean;
+  message: string;
+  file_path?: string;
+}
+
+export interface LocalDbFileInfo {
+  name: string;
+  size_bytes: number;
+  mtime: string;
+}
+
+export interface LocalDbFileListResponse {
+  success: boolean;
+  message: string;
+  files: LocalDbFileInfo[];
+}
+
+export interface LocalDbFileActionResponse {
+  success: boolean;
+  message: string;
+}
+
+export const localDbApi = {
+  uploadTenderFile: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post<LocalDbFileUploadResponse>('/api/localdb/tender/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+  uploadBidFile: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post<LocalDbFileUploadResponse>('/api/localdb/bid/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+
+  listTenderFiles: () => api.get<LocalDbFileListResponse>('/api/localdb/tender/list'),
+  listBidFiles: () => api.get<LocalDbFileListResponse>('/api/localdb/bid/list'),
+
+  deleteTenderFile: (name: string) =>
+    api.delete<LocalDbFileActionResponse>('/api/localdb/tender/delete', {
+      params: { name },
+    }),
+  deleteBidFile: (name: string) =>
+    api.delete<LocalDbFileActionResponse>('/api/localdb/bid/delete', {
+      params: { name },
+    }),
+
+  downloadTenderFile: (name: string) =>
+    api.get<Blob>(
+      `/api/localdb/tender/download?name=${encodeURIComponent(name)}`,
+      { responseType: 'blob' }
+    ),
+  downloadBidFile: (name: string) =>
+    api.get<Blob>(
+      `/api/localdb/bid/download?name=${encodeURIComponent(name)}`,
+      { responseType: 'blob' }
+    ),
+
+  saveCompanyBasicInfo: (payload: {
+    company_name: string;
+    unified_code: string;
+    established_date: string;
+    legal_representative: string;
+    registered_capital: string;
+    address: string;
+    enterprise_scale: string;
+    business_nature: string;
+  }) =>
+    api.post<{ success: boolean; message: string; mtime?: string }>(
+      '/api/localdb/company/save',
+      payload
+    ),
+};
+
 export default api;

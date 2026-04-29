@@ -8,6 +8,7 @@ def build_chapter_content_messages(
     parent_chapters: List[Dict[str, Any]] | None = None,
     sibling_chapters: List[Dict[str, Any]] | None = None,
     project_overview: str = "",
+    reference_materials: List[str] | None = None,
 ) -> List[Dict[str, str]]:
     """构建章节正文生成消息。"""
     chapter_id = chapter.get("id", "unknown")
@@ -30,6 +31,16 @@ def build_chapter_content_messages(
     if project_overview.strip():
         messages.append(
             {"role": "user", "content": f"项目概述信息：\n{project_overview}"}
+        )
+
+    if reference_materials and len(reference_materials) > 0:
+        # 把本地数据库资料作为“参考资料”注入提示词
+        joined_refs = "\n\n".join(reference_materials)
+        messages.append(
+            {
+                "role": "user",
+                "content": f"参考资料（来自公司本地数据库，优先用于事实/表述/适用性）：\n{joined_refs}\n\n请务必结合参考资料生成章节正文内容。",
+            }
         )
 
     if parent_chapters:

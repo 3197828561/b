@@ -2,12 +2,15 @@
  * 主应用组件
  */
 import React from 'react';
+import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { useAppState } from './hooks/useAppState';
 import ConfigPanel from './components/ConfigPanel';
 import StepBar from './components/StepBar';
 import DocumentAnalysis from './pages/DocumentAnalysis';
 import OutlineEdit from './pages/OutlineEdit';
 import ContentEdit from './pages/ContentEdit';
+import LocalDbFiles from './pages/LocalDbFiles';
+import LocalDbCompanyBasicInfo from './pages/LocalDbCompanyBasicInfo';
 import { draftStorage } from './utils/draftStorage';
 
 function App() {
@@ -21,6 +24,9 @@ function App() {
     nextStep,
     prevStep,
     resetState,
+    openLocalDb,
+    backToSteps,
+    setLocalDbView,
   } = useAppState();
 
   const steps = ['标书解析', '目录编辑', '正文编辑'];
@@ -35,6 +41,18 @@ function App() {
   };
 
   const renderCurrentPage = () => {
+    if (state.uiMode === 'localDb') {
+      switch (state.localDbView) {
+        case 'dbFiles':
+          return <LocalDbFiles />;
+        case 'companyBasicInfo':
+          return <LocalDbCompanyBasicInfo />;
+        default:
+          return null;
+      }
+    }
+
+    // steps 模式
     switch (state.currentStep) {
       case 0:
         return (
@@ -56,11 +74,7 @@ function App() {
           />
         );
       case 2:
-        return (
-          <ContentEdit
-            outlineData={state.outlineData}
-          />
-        );
+        return <ContentEdit outlineData={state.outlineData} />;
       default:
         return null;
     }
@@ -72,13 +86,53 @@ function App() {
       <ConfigPanel
         config={state.config}
         onConfigChange={updateConfig}
+        onOpenLocalDb={openLocalDb}
       />
 
       {/* 主内容区域 */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* 步骤导航 */}
-        <div className="sticky top-0 z-50 bg-white shadow-sm px-6">
-          <StepBar steps={steps} currentStep={state.currentStep} />
+        <div className="sticky top-0 z-50 bg-white shadow-sm px-6 py-4">
+          {state.uiMode === 'steps' ? (
+            <StepBar steps={steps} currentStep={state.currentStep} />
+          ) : (
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={backToSteps}
+                  className="inline-flex items-center px-4 py-2 border text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 border-blue-600 bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500"
+                >
+                  <ArrowLeftIcon
+                    className="w-4 h-4 mr-2 text-white stroke-2"
+                    aria-hidden="true"
+                  />
+                  返回
+                </button>
+
+                <button
+                  onClick={() => setLocalDbView('dbFiles')}
+                  className={`inline-flex items-center px-4 py-2 border text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                    state.localDbView === 'dbFiles'
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 focus:ring-blue-500'
+                      : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:ring-blue-500'
+                  }`}
+                >
+                  数据库文件
+                </button>
+
+                <button
+                  onClick={() => setLocalDbView('companyBasicInfo')}
+                  className={`inline-flex items-center px-4 py-2 border text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                    state.localDbView === 'companyBasicInfo'
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 focus:ring-blue-500'
+                      : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:ring-blue-500'
+                  }`}
+                >
+                  公司基本信息
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 页面内容 */}
@@ -86,46 +140,48 @@ function App() {
           {renderCurrentPage()}
         </div>
 
-        {/* 底部导航按钮 */}
-        <div className="sticky bottom-0 z-50 bg-white border-t border-gray-200 px-6 py-4">
-          <div className="flex justify-between">
-            <div className="flex items-center space-x-3">
-              {state.currentStep === 0 && (
+        {state.uiMode === 'steps' && (
+          /* 底部导航按钮（仅步骤模式可见） */
+          <div className="sticky bottom-0 z-50 bg-white border-t border-gray-200 px-6 py-4">
+            <div className="flex justify-between">
+              <div className="flex items-center space-x-3">
+                {state.currentStep === 0 && (
+                  <button
+                    onClick={handleReset}
+                    title="清理所有缓存数据，从头开始"
+                    className="inline-flex items-center px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-red-50 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  >
+                    重置
+                  </button>
+                )}
+
                 <button
-                  onClick={handleReset}
-                  title="清理所有缓存数据，从头开始"
-                  className="inline-flex items-center px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-red-50 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  onClick={() => updateStep(0)}
+                  disabled={state.currentStep === 0}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400 disabled:text-white disabled:cursor-not-allowed"
                 >
-                  重置
+                  首页
                 </button>
-              )}
+
+                <button
+                  onClick={prevStep}
+                  disabled={state.currentStep === 0}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
+                  上一步
+                </button>
+              </div>
 
               <button
-                onClick={() => updateStep(0)}
-                disabled={state.currentStep === 0}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400 disabled:text-white disabled:cursor-not-allowed"
+                onClick={nextStep}
+                disabled={state.currentStep === steps.length - 1}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
-                首页
-              </button>
-
-              <button
-                onClick={prevStep}
-                disabled={state.currentStep === 0}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
-              >
-                上一步
+                下一步
               </button>
             </div>
-
-            <button
-              onClick={nextStep}
-              disabled={state.currentStep === steps.length - 1}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              下一步
-            </button>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

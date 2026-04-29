@@ -27,6 +27,14 @@ export interface OutlineData {
 }
 
 export interface AppState {
+  /**
+   * UI 模式：当前展示的是步骤流程页还是“公司本地数据库”页
+   */
+  uiMode: 'steps' | 'localDb';
+  /**
+   * 在 localDb 模式下的子页面
+   */
+  localDbView: 'dbFiles' | 'companyBasicInfo';
   currentStep: number;
   config: ConfigData;
   fileContent: string;

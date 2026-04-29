@@ -12,7 +12,7 @@ from .utils.logging_setup import setup_logging
 
 setup_logging(settings.enable_file_logging)
 
-from .routers import config, document, outline, content, expand
+from .routers import config, document, outline, content, expand, localdb
 
 # 创建FastAPI应用实例
 app = FastAPI(
@@ -36,6 +36,7 @@ app.include_router(document.router)
 app.include_router(outline.router)
 app.include_router(content.router)
 app.include_router(expand.router)
+app.include_router(localdb.router)
 
 
 # 健康检查端点
