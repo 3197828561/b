@@ -35,6 +35,19 @@ class ConfigManager:
             except Exception as exc:
                 logger.warning("读取配置文件失败，使用默认配置: %s", exc)
 
+        # 环境变量覆盖（部署 / 本机服务端配置，优先级高于 JSON 文件）
+        env_pairs = (
+            ("api_key", ("OPENAI_API_KEY", "AI_API_KEY")),
+            ("base_url", ("OPENAI_BASE_URL", "OPENAI_API_BASE")),
+            ("model_name", ("OPENAI_MODEL", "MODEL_NAME")),
+        )
+        for key, env_names in env_pairs:
+            for env_name in env_names:
+                raw = os.getenv(env_name)
+                if raw is not None and str(raw).strip() != "":
+                    default_config[key] = str(raw).strip()
+                    break
+
         return default_config
 
     def save_config(self, api_key: str, base_url: str, model_name: str) -> bool:

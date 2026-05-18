@@ -1,21 +1,70 @@
 import React from 'react';
 import { localDbApi } from '../services/api';
 
+interface LocalDbCompanyBasicInfoProps {
+  companyId: string;
+  /** 左侧当前选中公司的展示名，用于切换公司时预填「公司」字段 */
+  displayCompanyName: string;
+}
+
+const DEFAULT_DEMO = {
+  companyName: '昆山市尚为人力资源配置服务有限公司',
+  unifiedCode: '91320583742479647J',
+  establishedDate: '2002 年 8 月 23 日',
+  legalRepresentative: '张淇',
+  registeredCapital: '200 万元',
+  address: '昆山市玉山镇长江南路 666 号利得国际商务楼 1101 室',
+  enterpriseScale:
+    '职工 121 人，其中中高级职称 15 人；资产总计 1500 万元，净资产 600 万元',
+  businessNature:
+    '有限责任公司（自然人投资 / 控股），具备劳务派遣、人力资源服务双资质',
+};
+
 /**
- * 公司本地数据库 - 公司基本信息页（当前仅做界面占位/切换）。
+ * 公司本地数据库 - 公司基本信息页（按 companyId 写入对应知识库）。
  */
-const LocalDbCompanyBasicInfo: React.FC = () => {
-  const initialCompanyName = '昆山市尚为人力资源配置服务有限公司';
-  const [companyName, setCompanyName] = React.useState(initialCompanyName);
-  const [unifiedCode, setUnifiedCode] = React.useState('91320583742479647J');
-  const [establishedDate, setEstablishedDate] = React.useState('2002 年 8 月 23 日');
-  const [legalRepresentative, setLegalRepresentative] = React.useState('张淇');
-  const [registeredCapital, setRegisteredCapital] = React.useState('200 万元');
-  const [address, setAddress] = React.useState('昆山市玉山镇长江南路 666 号利得国际商务楼 1101 室');
-  const [enterpriseScale, setEnterpriseScale] = React.useState('职工 121 人，其中中高级职称 15 人；资产总计 1500 万元，净资产 600 万元');
-  const [businessNature, setBusinessNature] = React.useState('有限责任公司（自然人投资 / 控股），具备劳务派遣、人力资源服务双资质');
+const LocalDbCompanyBasicInfo: React.FC<LocalDbCompanyBasicInfoProps> = ({
+  companyId,
+  displayCompanyName,
+}) => {
+  const [companyName, setCompanyName] = React.useState(DEFAULT_DEMO.companyName);
+  const [unifiedCode, setUnifiedCode] = React.useState(DEFAULT_DEMO.unifiedCode);
+  const [establishedDate, setEstablishedDate] = React.useState(DEFAULT_DEMO.establishedDate);
+  const [legalRepresentative, setLegalRepresentative] = React.useState(
+    DEFAULT_DEMO.legalRepresentative
+  );
+  const [registeredCapital, setRegisteredCapital] = React.useState(DEFAULT_DEMO.registeredCapital);
+  const [address, setAddress] = React.useState(DEFAULT_DEMO.address);
+  const [enterpriseScale, setEnterpriseScale] = React.useState(DEFAULT_DEMO.enterpriseScale);
+  const [businessNature, setBusinessNature] = React.useState(DEFAULT_DEMO.businessNature);
   const [isEditing, setIsEditing] = React.useState(false);
-  const [message, setMessage] = React.useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = React.useState<{ type: 'success' | 'error'; text: string } | null>(
+    null
+  );
+
+  React.useEffect(() => {
+    setIsEditing(false);
+    setMessage(null);
+    if (companyId === 'default') {
+      setCompanyName(displayCompanyName || DEFAULT_DEMO.companyName);
+      setUnifiedCode(DEFAULT_DEMO.unifiedCode);
+      setEstablishedDate(DEFAULT_DEMO.establishedDate);
+      setLegalRepresentative(DEFAULT_DEMO.legalRepresentative);
+      setRegisteredCapital(DEFAULT_DEMO.registeredCapital);
+      setAddress(DEFAULT_DEMO.address);
+      setEnterpriseScale(DEFAULT_DEMO.enterpriseScale);
+      setBusinessNature(DEFAULT_DEMO.businessNature);
+    } else {
+      setCompanyName(displayCompanyName || '');
+      setUnifiedCode('');
+      setEstablishedDate('');
+      setLegalRepresentative('');
+      setRegisteredCapital('');
+      setAddress('');
+      setEnterpriseScale('');
+      setBusinessNature('');
+    }
+  }, [companyId, displayCompanyName]);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -23,10 +72,9 @@ const LocalDbCompanyBasicInfo: React.FC = () => {
   };
 
   const handleConfirm = () => {
-    // 仅保存到后端知识库，供 AI 生成章节时检索使用
     void (async () => {
       try {
-        const res = await localDbApi.saveCompanyBasicInfo({
+        const res = await localDbApi.saveCompanyBasicInfo(companyId, {
           company_name: companyName,
           unified_code: unifiedCode,
           established_date: establishedDate,
@@ -45,8 +93,9 @@ const LocalDbCompanyBasicInfo: React.FC = () => {
         }
 
         setMessage({ type: 'error', text: res.data?.message || '公司基本信息保存失败' });
-      } catch (e: any) {
-        setMessage({ type: 'error', text: e?.message || '公司基本信息保存失败' });
+      } catch (e: unknown) {
+        const err = e as { message?: string };
+        setMessage({ type: 'error', text: err?.message || '公司基本信息保存失败' });
       }
     })();
   };
@@ -54,22 +103,22 @@ const LocalDbCompanyBasicInfo: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-xl font-semibold text-gray-900 flex items-center flex-wrap gap-x-3 gap-y-2">
-              <span>公司：</span>
-              <input
-                className={`w-[420px] max-w-full px-3 py-2 text-base rounded-md border shadow-sm focus:outline-none focus:ring-2 ${
-                  isEditing
-                    ? 'border-blue-400 focus:ring-blue-500 bg-white text-gray-900'
-                    : 'border-gray-200 bg-gray-50 text-gray-700 cursor-not-allowed'
-                }`}
-                value={companyName}
-                disabled={!isEditing}
-                onChange={(e) => setCompanyName(e.target.value)}
-              />
-            </div>
-          </div>
+        <p className="text-xs text-gray-500 mb-4">
+          当前库：<span className="font-mono text-gray-800">{companyId}</span>
+        </p>
+        <div className="flex flex-col gap-2">
+          <span className="text-xl font-semibold text-gray-900">公司</span>
+          <textarea
+            rows={3}
+            className={`w-full min-h-[4.5rem] resize-y px-3 py-2 text-base leading-relaxed rounded-md border shadow-sm focus:outline-none focus:ring-2 break-words ${
+              isEditing
+                ? 'border-blue-400 focus:ring-blue-500 bg-white text-gray-900'
+                : 'border-gray-200 bg-gray-50 text-gray-700 cursor-not-allowed'
+            }`}
+            value={companyName}
+            disabled={!isEditing}
+            onChange={(e) => setCompanyName(e.target.value.replace(/\r?\n/g, ''))}
+          />
         </div>
 
         {message && (
@@ -187,7 +236,6 @@ const LocalDbCompanyBasicInfo: React.FC = () => {
           </div>
         </div>
 
-        {/* 右下角按钮 */}
         <div className="mt-6 flex justify-end gap-3">
           <button
             type="button"
@@ -212,4 +260,3 @@ const LocalDbCompanyBasicInfo: React.FC = () => {
 };
 
 export default LocalDbCompanyBasicInfo;
-

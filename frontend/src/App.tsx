@@ -11,16 +11,22 @@ import OutlineEdit from './pages/OutlineEdit';
 import ContentEdit from './pages/ContentEdit';
 import LocalDbFiles from './pages/LocalDbFiles';
 import LocalDbCompanyBasicInfo from './pages/LocalDbCompanyBasicInfo';
+import LocalDbAppendix from './pages/LocalDbAppendix';
 import { draftStorage } from './utils/draftStorage';
 
 function App() {
   const {
     state,
-    updateConfig,
     updateStep,
     updateFileContent,
     updateAnalysisResults,
+    updateScoringItems,
     updateOutline,
+    updateBookWordCountRange,
+    setActiveCompany,
+    addCompany,
+    renameCompany,
+    removeCompany,
     nextStep,
     prevStep,
     resetState,
@@ -44,9 +50,18 @@ function App() {
     if (state.uiMode === 'localDb') {
       switch (state.localDbView) {
         case 'dbFiles':
-          return <LocalDbFiles />;
+          return <LocalDbFiles companyId={state.activeCompanyId} />;
         case 'companyBasicInfo':
-          return <LocalDbCompanyBasicInfo />;
+          return (
+            <LocalDbCompanyBasicInfo
+              companyId={state.activeCompanyId}
+              displayCompanyName={
+                state.companies.find((c) => c.id === state.activeCompanyId)?.name ?? ''
+              }
+            />
+          );
+        case 'appendix':
+          return <LocalDbAppendix companyId={state.activeCompanyId} />;
         default:
           return null;
       }
@@ -60,8 +75,10 @@ function App() {
             fileContent={state.fileContent}
             projectOverview={state.projectOverview}
             techRequirements={state.techRequirements}
+            activeCompanyId={state.activeCompanyId}
             onFileUpload={updateFileContent}
             onAnalysisComplete={updateAnalysisResults}
+            onScoringItemsUpdate={updateScoringItems}
           />
         );
       case 1:
@@ -70,11 +87,26 @@ function App() {
             projectOverview={state.projectOverview}
             techRequirements={state.techRequirements}
             outlineData={state.outlineData}
+            scoringItems={state.scoringItems}
             onOutlineGenerated={updateOutline}
           />
         );
       case 2:
-        return <ContentEdit outlineData={state.outlineData} />;
+        return (
+          <ContentEdit
+            outlineData={state.outlineData}
+            projectOverview={state.projectOverview}
+            techRequirements={state.techRequirements}
+            bookWordCountMin={state.bookWordCountMin}
+            bookWordCountMax={state.bookWordCountMax}
+            onBookWordCountRangeChange={updateBookWordCountRange}
+            localdbCompanyId={state.activeCompanyId}
+            scoringItems={state.scoringItems}
+            companyDisplayName={
+              state.companies.find((c) => c.id === state.activeCompanyId)?.name ?? ''
+            }
+          />
+        );
       default:
         return null;
     }
@@ -84,8 +116,12 @@ function App() {
     <div className="h-screen overflow-hidden bg-gray-50 flex">
       {/* 左侧配置面板 */}
       <ConfigPanel
-        config={state.config}
-        onConfigChange={updateConfig}
+        companies={state.companies}
+        activeCompanyId={state.activeCompanyId}
+        onSelectCompany={setActiveCompany}
+        onAddCompany={addCompany}
+        onRenameCompany={renameCompany}
+        onRemoveCompany={removeCompany}
         onOpenLocalDb={openLocalDb}
       />
 
@@ -129,6 +165,17 @@ function App() {
                   }`}
                 >
                   公司基本信息
+                </button>
+
+                <button
+                  onClick={() => setLocalDbView('appendix')}
+                  className={`inline-flex items-center px-4 py-2 border text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                    state.localDbView === 'appendix'
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 focus:ring-blue-500'
+                      : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:ring-blue-500'
+                  }`}
+                >
+                  附录模板
                 </button>
               </div>
             </div>

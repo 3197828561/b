@@ -24,6 +24,14 @@ async def generate_chapter_content(request: ChapterContentRequest):
             parent_chapters=request.parent_chapters,
             sibling_chapters=request.sibling_chapters,
             project_overview=request.project_overview,
+            chapter_word_count_min=request.chapter_word_count_min,
+            chapter_word_count_max=request.chapter_word_count_max,
+            book_word_count_min=request.book_word_count_min,
+            book_word_count_max=request.book_word_count_max,
+            leaf_chapter_index=request.leaf_chapter_index,
+            leaf_chapter_total=request.leaf_chapter_total,
+            localdb_company_id=request.localdb_company_id,
+            company_display_name=request.company_display_name,
         )
         return {"success": True, "content": content}
     except AppError as exc:
@@ -48,6 +56,14 @@ async def generate_chapter_content_stream(request: ChapterContentRequest):
                 parent_chapters=request.parent_chapters,
                 sibling_chapters=request.sibling_chapters,
                 project_overview=request.project_overview,
+                chapter_word_count_min=request.chapter_word_count_min,
+                chapter_word_count_max=request.chapter_word_count_max,
+                book_word_count_min=request.book_word_count_min,
+                book_word_count_max=request.book_word_count_max,
+                leaf_chapter_index=request.leaf_chapter_index,
+                leaf_chapter_total=request.leaf_chapter_total,
+                localdb_company_id=request.localdb_company_id,
+                company_display_name=request.company_display_name,
             ):
                 yield sse_chunk(chunk)
         except AppError as exc:

@@ -2,6 +2,8 @@
 
 import aiofiles
 import os
+import shutil
+import subprocess
 import time
 import gc
 import io
@@ -35,15 +37,51 @@ except ImportError as e:
 class FileService:
     """文件处理服务"""
 
+    OLE_COMPOUND_HEADER = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+
+    SUPPORTED_DOCUMENTS_MESSAGE = (
+        "支持 PDF、Word（.doc/.docx）、WPS（.wps/.wpt）、RTF、ODT、TXT 等；"
+        "旧版 .doc/.wps 等可尝试自动转换（需本机 Microsoft Word 或 LibreOffice）"
+    )
+
     ALLOWED_DOCUMENT_TYPES = {
         "application/pdf",
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/rtf",
+        "text/rtf",
+        "text/plain",
+        "application/vnd.oasis.opendocument.text",
         # WPS/部分浏览器或中转服务可能上报的 MIME
         "application/wps-office.docx",
         "application/wps-office.doc",
+        "application/wps-office.wps",
+        "application/wps-office.wpt",
     }
-    ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx"}
+    ALLOWED_DOCUMENT_EXTENSIONS = {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".wps",
+        ".wpt",
+        ".dot",
+        ".dotx",
+        ".rtf",
+        ".odt",
+        ".txt",
+        ".text",
+        ".md",
+    }
+    WORD_LIKE_EXTENSIONS = {
+        ".doc",
+        ".docx",
+        ".wps",
+        ".wpt",
+        ".dot",
+        ".dotx",
+        ".rtf",
+        ".odt",
+    }
 
     # 图片上传配置
     IMAGE_UPLOAD_URL = "https://mt.agnet.top/image/upload"
@@ -81,20 +119,232 @@ class FileService:
         if normalized_content_type in {
             "application/msword",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/rtf",
+            "text/rtf",
+            "application/vnd.oasis.opendocument.text",
             "application/wps-office.docx",
             "application/wps-office.doc",
+            "application/wps-office.wps",
+            "application/wps-office.wpt",
         }:
             return "docx"
+        if normalized_content_type == "text/plain":
+            return "text"
 
         # 部分浏览器或环境会给出 application/octet-stream，使用扩展名兜底
         if filename:
             _, ext = os.path.splitext(filename.lower())
             if ext == ".pdf":
                 return "pdf"
-            if ext in {".doc", ".docx"}:
+            if ext in {".txt", ".text", ".md"}:
+                return "text"
+            if ext in FileService.WORD_LIKE_EXTENSIONS or ext == ".docx":
                 return "docx"
 
         return None
+
+    @staticmethod
+    def _read_file_header(file_path: str, size: int = 512) -> bytes:
+        with open(file_path, "rb") as fh:
+            return fh.read(size)
+
+    @staticmethod
+    def _sniff_binary_kind(header: bytes, filename: str | None) -> str:
+        """pdf | zip_office | ole | rtf | plaintext | markup | word_guess | unknown"""
+        h = header or b""
+        _, ext = os.path.splitext((filename or "").lower())
+        if h.startswith(b"%PDF"):
+            return "pdf"
+        if h.startswith(b"PK"):
+            return "zip_office"
+        if h.startswith(FileService.OLE_COMPOUND_HEADER):
+            return "ole"
+        if h.startswith((b"{\\rtf", b"{\\RTF")):
+            return "rtf"
+        stripped = h.lstrip()
+        if stripped.startswith(
+            (b"<?xml", b"<html", b"<HTML", b"<w:", b"<W:")
+        ):
+            return "markup"
+        if ext in {".txt", ".text", ".md", ".csv"}:
+            return "plaintext"
+        if ext == ".pdf":
+            return "pdf"
+        if ext == ".rtf":
+            return "rtf"
+        if ext in FileService.WORD_LIKE_EXTENSIONS:
+            return "word_guess"
+        return "unknown"
+
+    @staticmethod
+    def _extract_plain_text(file_path: str) -> str:
+        with open(file_path, "rb") as fh:
+            raw = fh.read()
+        for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk", "latin-1"):
+            try:
+                return raw.decode(encoding).strip()
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace").strip()
+
+    @staticmethod
+    def _extract_rtf_text(file_path: str) -> str:
+        try:
+            from striprtf.striprtf import rtf_to_text
+        except ImportError as exc:
+            raise Exception(
+                "RTF 解析依赖 striprtf，请执行: pip install -r backend/requirements.txt"
+            ) from exc
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
+            return rtf_to_text(fh.read()).strip()
+
+    @staticmethod
+    def _find_libreoffice_executable() -> Optional[str]:
+        env_path = os.environ.get("LIBREOFFICE_PATH") or os.environ.get("SOFFICE_PATH")
+        if env_path and os.path.isfile(env_path):
+            return env_path
+        if os.name == "nt":
+            for candidate in (
+                r"C:\Program Files\LibreOffice\program\soffice.exe",
+                r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            ):
+                if os.path.isfile(candidate):
+                    return candidate
+        return shutil.which("soffice") or shutil.which("libreoffice")
+
+    @staticmethod
+    def _convert_to_docx_via_libreoffice(input_path: str) -> tuple[str, list[str]]:
+        soffice = FileService._find_libreoffice_executable()
+        if not soffice:
+            raise Exception(
+                "未检测到 LibreOffice，无法自动转换该文档。"
+                "请安装 LibreOffice，或将文件另存为 .docx / .pdf 后上传。"
+            )
+        out_dir = tempfile.mkdtemp(prefix="lo_convert_")
+        cleanup_dirs = [out_dir]
+        try:
+            cmd = [
+                soffice,
+                "--headless",
+                "--norestore",
+                "--convert-to",
+                "docx",
+                "--outdir",
+                out_dir,
+                os.path.abspath(input_path),
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=180,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip()
+                raise Exception(detail or f"LibreOffice 退出码 {proc.returncode}")
+            base = os.path.splitext(os.path.basename(input_path))[0]
+            preferred = os.path.join(out_dir, f"{base}.docx")
+            if os.path.isfile(preferred):
+                return preferred, cleanup_dirs
+            for fn in os.listdir(out_dir):
+                if fn.lower().endswith(".docx"):
+                    return os.path.join(out_dir, fn), cleanup_dirs
+            raise Exception("LibreOffice 转换后未生成 .docx 文件")
+        except Exception:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise
+
+    @staticmethod
+    def _convert_to_docx(input_path: str) -> tuple[str, list[str]]:
+        """将 Office 文档转为临时 docx，返回 (docx路径, 需清理的路径或目录)。"""
+        cleanup: list[str] = []
+        if os.name == "nt":
+            try:
+                converted = FileService._convert_doc_to_docx_windows(input_path)
+                cleanup.append(converted)
+                return converted, cleanup
+            except Exception as exc:
+                logger.warning("Word COM 转换失败，尝试 LibreOffice: %s", exc)
+        docx_path, lo_cleanup = FileService._convert_to_docx_via_libreoffice(input_path)
+        cleanup.extend(lo_cleanup)
+        return docx_path, cleanup
+
+    @staticmethod
+    def _cleanup_temp_paths(paths: list[str]) -> None:
+        for path in paths:
+            if not path:
+                continue
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                FileService._safe_file_cleanup(path)
+
+    @staticmethod
+    def _pick_ocr_docx_path(original_path: str, cleanup_paths: list[str]) -> str:
+        for path in reversed(cleanup_paths):
+            if path.lower().endswith(".docx") and os.path.isfile(path):
+                return path
+        return original_path
+
+    @staticmethod
+    async def extract_localdb_document_text_from_path(
+        file_path: str,
+        content_type: str | None = None,
+        filename: str | None = None,
+    ) -> tuple[str, str, list[str]]:
+        """
+        从磁盘文件抽取正文（本地库 RAG）。
+        返回 (文本, OCR用类型 pdf/docx/text, 临时路径列表供清理)。
+        """
+        header = FileService._read_file_header(file_path)
+        binary_kind = FileService._sniff_binary_kind(header, filename)
+        doc_kind = FileService._get_document_kind(content_type, filename)
+        cleanup: list[str] = []
+        ocr_kind = doc_kind or ("pdf" if binary_kind == "pdf" else "docx")
+
+        try:
+            if binary_kind == "pdf" or doc_kind == "pdf":
+                text = await FileService.extract_text_from_pdf(file_path)
+                return text, "pdf", cleanup
+
+            if binary_kind == "plaintext" or doc_kind == "text":
+                return FileService._extract_plain_text(file_path), "text", cleanup
+
+            if binary_kind == "rtf":
+                return FileService._extract_rtf_text(file_path), "docx", cleanup
+
+            if binary_kind == "zip_office":
+                try:
+                    text = await FileService.extract_text_from_docx(file_path)
+                    return text, "docx", cleanup
+                except Exception:
+                    docx_path, extra = FileService._convert_to_docx(file_path)
+                    cleanup.extend(extra)
+                    text = await FileService.extract_text_from_docx(docx_path)
+                    return text, "docx", cleanup
+
+            if binary_kind == "ole":
+                docx_path, extra = FileService._convert_to_docx(file_path)
+                cleanup.extend(extra)
+                text = await FileService.extract_text_from_docx(docx_path)
+                return text, "docx", cleanup
+
+            if binary_kind in {"markup", "word_guess", "unknown"}:
+                docx_path, extra = FileService._convert_to_docx(file_path)
+                cleanup.extend(extra)
+                text = await FileService.extract_text_from_docx(docx_path)
+                return text, "docx", cleanup
+
+            raise Exception(FileService.SUPPORTED_DOCUMENTS_MESSAGE)
+        except Exception as exc:
+            FileService._cleanup_temp_paths(cleanup)
+            if "不支持的文件" in str(exc) or "支持 PDF" in str(exc):
+                raise
+            raise Exception(
+                f"无法读取该文档：{exc}。{FileService.SUPPORTED_DOCUMENTS_MESSAGE}"
+            ) from exc
 
     @staticmethod
     async def upload_image_to_server(image_data: bytes, filename: str) -> Optional[str]:
@@ -223,6 +473,49 @@ class FileService:
             gc.collect()
             logger.warning("Word文档图片提取失败: %s", e)
             return []
+
+    @staticmethod
+    def save_localdb_extracted_images(
+        company_id: str,
+        source_filename: str,
+        images: List[Tuple[bytes, str, int]],
+    ) -> List[Tuple[str, int, bytes]]:
+        """
+        将 Word 内嵌图导出到公司本地库目录，供查阅与 OCR。
+        返回 [(相对公司根目录的路径, 图片序号, 图片字节), ...]
+        """
+        from ..utils.localdb_paths import (
+            localdb_company_root,
+            localdb_extracted_images_dir,
+        )
+
+        if not images:
+            return []
+
+        out_dir = localdb_extracted_images_dir(company_id, source_filename)
+        os.makedirs(out_dir, exist_ok=True)
+        company_root = localdb_company_root(company_id)
+        saved: List[Tuple[str, int, bytes]] = []
+
+        for img_data, ext, img_index in images:
+            ext_clean = (ext or "png").lstrip(".").lower() or "png"
+            name = f"img_{img_index}.{ext_clean}"
+            full_path = os.path.join(out_dir, name)
+            with open(full_path, "wb") as fh:
+                fh.write(img_data)
+            rel_path = os.path.relpath(full_path, company_root).replace("\\", "/")
+            saved.append((rel_path, img_index, img_data))
+
+        return saved
+
+    @staticmethod
+    def remove_localdb_extracted_images(company_id: str, source_filename: str) -> None:
+        """删除某资料文件对应的内嵌图导出目录。"""
+        from ..utils.localdb_paths import localdb_extracted_images_dir
+
+        out_dir = localdb_extracted_images_dir(company_id, source_filename)
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     @staticmethod
     def _safe_file_cleanup(file_path: str, max_retries: int = 3) -> bool:
@@ -623,8 +916,8 @@ class FileService:
 
     @staticmethod
     def _convert_doc_to_docx_windows(doc_path: str) -> str:
-        """在 Windows 上将 .doc 转换为临时 .docx 文件并返回路径。"""
-        # 旧版 .doc（OLE）转换依赖本机安装的 Microsoft Word
+        """在 Windows 上通过 Word 将文档转为临时 .docx（支持 .doc/.wps 等 Word 可打开格式）。"""
+        # 依赖本机安装的 Microsoft Word 与 pywin32
         if os.name != "nt":
             raise Exception("当前系统不支持 .doc 自动转换，请先另存为 .docx")
 
@@ -696,39 +989,19 @@ class FileService:
             except Exception:
                 file_header = b""
 
-            # 根据文件类型提取文本和图片
-            document_kind = FileService._get_document_kind(
+            if not FileService.is_supported_document(
                 file.content_type, file.filename
-            )
+            ):
+                raise Exception(FileService.SUPPORTED_DOCUMENTS_MESSAGE)
 
-            # 修正 doc/docx 误判：docx 必须是 ZIP 容器（PK 开头）
-            if document_kind == "docx":
-                is_zip_docx = file_header.startswith(b"PK")
-                if not is_zip_docx:
-                    raise Exception(
-                        "当前 Word 文件不是 docx 格式。请将文档另存为 .docx 后再上传。"
-                    )
-
-            if document_kind == "pdf":
-                text = await FileService.extract_text_from_pdf(file_path)
-            elif document_kind == "docx":
-                # OLE 头：D0 CF 11 E0 ...，表示旧版 .doc
-                is_legacy_doc = file_header.startswith(
-                    b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+            text, _ocr_kind, cleanup_paths = (
+                await FileService.extract_localdb_document_text_from_path(
+                    file_path,
+                    content_type=file.content_type,
+                    filename=file.filename,
                 )
-                converted_docx_path = None
-                if is_legacy_doc:
-                    converted_docx_path = FileService._convert_doc_to_docx_windows(
-                        file_path
-                    )
-                    text = await FileService.extract_text_from_docx(converted_docx_path)
-                else:
-                    text = await FileService.extract_text_from_docx(file_path)
-
-                if converted_docx_path:
-                    FileService._safe_file_cleanup(converted_docx_path)
-            else:
-                raise Exception("不支持的文件类型，请上传PDF或Word文档")
+            )
+            FileService._cleanup_temp_paths(cleanup_paths)
 
             # 成功提取后，使用安全的文件清理方法
             FileService._safe_file_cleanup(file_path)

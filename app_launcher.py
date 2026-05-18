@@ -34,6 +34,7 @@ uvicorn_server = None
 server_thread = None
 server_should_stop = False
 server_start_error = None
+_cleanup_once_done = False
 
 def kill_process_on_port(port: int):
     """终止占用指定端口的进程（排除当前进程）"""
@@ -58,19 +59,22 @@ def kill_process_on_port(port: int):
 
 def cleanup_server():
     """清理服务器进程"""
-    global uvicorn_server, server_thread, server_should_stop
-    
+    global uvicorn_server, server_thread, server_should_stop, _cleanup_once_done
+    if _cleanup_once_done:
+        return
+    _cleanup_once_done = True
+
     print("正在关闭服务器...")
     server_should_stop = True
-    
+
     # 尝试优雅关闭uvicorn服务器
     if uvicorn_server:
         try:
             uvicorn_server.should_exit = True
             print("服务器已设置关闭标志")
-        except:
+        except Exception:
             pass
-    
+
     # 强制终止占用8000端口的进程
     kill_process_on_port(8000)
 
@@ -82,8 +86,10 @@ def signal_handler(signum, frame):
 
 def main():
     """主函数"""
-    global uvicorn_server, server_thread, server_should_stop, server_start_error
-    
+    global uvicorn_server, server_thread, server_should_stop, server_start_error, _cleanup_once_done
+
+    _cleanup_once_done = False
+
     print("="*50)
     print("昆山市尚为人力资源配置服务有限公司投标助手 - 启动中...")
     print("="*50)
@@ -103,8 +109,22 @@ def main():
         time.sleep(0.5)
 
         print("OK: 切换到backend目录")
+
+        static_index = Path("static") / "index.html"
+        if not static_index.is_file():
+            print("")
+            print("!" * 50)
+            print("警告: 未找到前端页面 backend/static/index.html")
+            print("  常见原因: 运行过 build.py 但构建被中断，清理了 static 却未重新复制前端。")
+            print("  解决办法: 在项目根目录执行完整构建 python build.py")
+            print("  或: cd frontend && npm run build，再把 frontend/build 整个文件夹")
+            print("       复制/重命名为 backend/static")
+            print("!" * 50)
+            print("服务仍会启动（API 可用），但不会自动打开浏览器首页。")
+            print("")
+
         print("启动服务器...")
-        
+
         def start_server():
             global uvicorn_server, server_should_stop, server_start_error
             try:
@@ -137,7 +157,21 @@ def main():
         server_thread.start()
         
         print("等待服务启动...")
-        time.sleep(5)
+        health_ok = False
+        for _ in range(60):
+            if server_start_error is not None:
+                break
+            if not server_thread.is_alive():
+                break
+            try:
+                import urllib.request
+
+                urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=1)
+                health_ok = True
+                break
+            except Exception:
+                time.sleep(0.5)
+
         if server_start_error is not None:
             print("\n服务启动失败，未打开浏览器。")
             print("请先安装依赖: python -m pip install -r backend/requirements.txt")
@@ -146,13 +180,21 @@ def main():
             print("\n服务启动失败，未打开浏览器。")
             print("请检查端口占用、依赖安装或启动日志。")
             return
-        
+        if not health_ok:
+            print("\n服务在超时内未通过健康检查，未自动打开浏览器。")
+            print("请查看上方报错，或手动访问 http://localhost:8000/health")
+            return
+
         def open_browser():
             if not server_should_stop:
-                time.sleep(2)
+                time.sleep(0.5)
                 try:
-                    webbrowser.open('http://localhost:8000')
-                    print("浏览器已打开")
+                    if static_index.is_file():
+                        webbrowser.open("http://localhost:8000/")
+                        print("浏览器已打开（首页）")
+                    else:
+                        webbrowser.open("http://localhost:8000/docs")
+                        print("浏览器已打开（API 文档，因缺少 static 未打开首页）")
                 except Exception as e:
                     print(f"打开浏览器失败: {e}")
         

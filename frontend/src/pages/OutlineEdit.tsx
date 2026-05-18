@@ -2,7 +2,8 @@
  * 目录编辑页面
  */
 import React, { useState } from 'react';
-import { OutlineData, OutlineItem, OutlineMode } from '../types';
+import { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from '../types';
+import { checkScoringCoverageLocal } from '../utils/coverageCheck';
 import { expandApi, getErrorMessage, outlineApi, readSseStream } from '../services/api';
 import { ChevronRightIcon, ChevronDownIcon, DocumentTextIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
 
@@ -10,6 +11,7 @@ interface OutlineEditProps {
   projectOverview: string;
   techRequirements: string;
   outlineData: OutlineData | null;
+  scoringItems: TechnicalRequirementGroup[];
   onOutlineGenerated: (outline: OutlineData) => void;
 }
 
@@ -17,6 +19,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   projectOverview,
   techRequirements,
   outlineData,
+  scoringItems,
   onOutlineGenerated,
 }) => {
   const [generating, setGenerating] = useState(false);
@@ -470,6 +473,33 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       {/* 操作按钮 */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-xl font-semibold text-gray-900 mb-4">📋 目录管理</h2>
+
+        {outlineData && scoringItems.length > 0 && (() => {
+          const cov = checkScoringCoverageLocal(scoringItems, outlineData.outline);
+          return (
+            <div
+              className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+                cov.uncoveredCount > 0
+                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                  : 'border-green-200 bg-green-50 text-green-900'
+              }`}
+            >
+              <p className="font-medium">
+                评分项覆盖：{cov.coveredCount}/{cov.total}（{Math.round(cov.coverageRate * 100)}%）
+              </p>
+              {cov.uncoveredCount > 0 && (
+                <ul className="mt-2 list-disc pl-5 text-xs space-y-1">
+                  {cov.uncovered.slice(0, 8).map((g) => (
+                    <li key={g.requirement_id}>{g.title}</li>
+                  ))}
+                  {cov.uncoveredCount > 8 && (
+                    <li>…另有 {cov.uncoveredCount - 8} 项未覆盖</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          );
+        })()}
         
         <div className="space-y-4">
           <div>

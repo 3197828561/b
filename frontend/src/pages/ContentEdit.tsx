@@ -1,16 +1,27 @@
 /**
  * 内容编辑页面 - 完整标书预览和生成
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { OutlineData, OutlineItem } from '../types';
+import { OutlineData, OutlineItem, TechnicalRequirementGroup } from '../types';
+import { checkScoringCoverageLocal } from '../utils/coverageCheck';
 import { DocumentTextIcon, PlayIcon, DocumentArrowDownIcon, CheckCircleIcon, ExclamationCircleIcon, ArrowUpIcon } from '@heroicons/react/24/outline';
-import { collectSseText, contentApi, ChapterContentRequest, documentApi, getErrorMessage } from '../services/api';
+import { collectSseText, contentApi, ChapterContentRequest, documentApi, localDbApi, getErrorMessage } from '../services/api';
 import { saveAs } from 'file-saver';
 import { draftStorage } from '../utils/draftStorage';
+import { allocatePerChapterFromBookTotal } from '../utils/bookWordAllocation';
 
 interface ContentEditProps {
   outlineData: OutlineData | null;
+  projectOverview: string;
+  techRequirements: string;
+  bookWordCountMin: number;
+  bookWordCountMax: number;
+  onBookWordCountRangeChange: (min: number, max: number) => void;
+  localdbCompanyId: string;
+  scoringItems: TechnicalRequirementGroup[];
+  /** 当前投标主体显示名，参与提示词与检索，避免多公司套同一套话 */
+  companyDisplayName: string;
 }
 
 interface GenerationProgress {
@@ -24,9 +35,34 @@ interface GenerationProgress {
 
 const ContentEdit: React.FC<ContentEditProps> = ({
   outlineData,
+  projectOverview,
+  techRequirements,
+  bookWordCountMin,
+  bookWordCountMax,
+  onBookWordCountRangeChange,
+  localdbCompanyId,
+  scoringItems,
+  companyDisplayName,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [exportTemplateReady, setExportTemplateReady] = useState(false);
+  const [insertLocaldbImages, setInsertLocaldbImages] = useState(true);
+  const [includeAppendices, setIncludeAppendices] = useState(false);
+  const [complianceOpen, setComplianceOpen] = useState(false);
+  const [complianceLoading, setComplianceLoading] = useState(false);
+  const [complianceResult, setComplianceResult] = useState<import('../services/api').ComplianceCheckResponse | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await localDbApi.getExportTemplateInfo(localdbCompanyId);
+        setExportTemplateReady(!!res.data?.exists);
+      } catch {
+        setExportTemplateReady(false);
+      }
+    })();
+  }, [localdbCompanyId]);
   const [progress, setProgress] = useState<GenerationProgress>({
     total: 0,
     completed: 0,
@@ -36,6 +72,19 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   });
   const [leafItems, setLeafItems] = useState<OutlineItem[]>([]);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+
+  const leafCount = leafItems.length;
+  const { perChapterMin, perChapterMax } = useMemo(
+    () => allocatePerChapterFromBookTotal(bookWordCountMin, bookWordCountMax, leafCount),
+    [bookWordCountMin, bookWordCountMax, leafCount]
+  );
+
+  const coverageSummary = useMemo(() => {
+    if (!outlineData || !scoringItems.length) {
+      return null;
+    }
+    return checkScoringCoverageLocal(scoringItems, outlineData.outline);
+  }, [outlineData, scoringItems]);
 
   // 收集所有叶子节点
   const collectLeafItems = useCallback((items: OutlineItem[]): OutlineItem[] => {
@@ -200,11 +249,27 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       const parentChapters = getParentChapters(item.id, outlineData.outline);
       const siblingChapters = getSiblingChapters(item.id, outlineData.outline);
 
+      const n = leafItems.length;
+      const { perChapterMin: pcm, perChapterMax: pcx } = allocatePerChapterFromBookTotal(
+        bookWordCountMin,
+        bookWordCountMax,
+        n
+      );
+      const leafIndex = leafItems.findIndex((l) => l.id === item.id) + 1;
+
       const request: ChapterContentRequest = {
         chapter: item,
         parent_chapters: parentChapters,
         sibling_chapters: siblingChapters,
-        project_overview: projectOverview
+        project_overview: projectOverview,
+        chapter_word_count_min: pcm,
+        chapter_word_count_max: pcx,
+        book_word_count_min: bookWordCountMin,
+        book_word_count_max: bookWordCountMax,
+        leaf_chapter_index: leafIndex > 0 ? leafIndex : 1,
+        leaf_chapter_total: Math.max(1, n),
+        localdb_company_id: localdbCompanyId,
+        company_display_name: companyDisplayName.trim() || undefined,
       };
 
       const response = await contentApi.generateChapterContentStream(request);
@@ -327,37 +392,110 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const buildExportPayload = () => {
+    if (!outlineData) return null;
+    const buildExportOutline = (items: OutlineItem[]): OutlineItem[] =>
+      items.map((item) => {
+        const exportedItem: OutlineItem = {
+          ...item,
+          content: getLatestContent(item),
+        };
+        if (item.children?.length) {
+          exportedItem.children = buildExportOutline(item.children);
+        }
+        return exportedItem;
+      });
+    return {
+      project_name: outlineData.project_name,
+      project_overview: outlineData.project_overview || projectOverview,
+      outline: buildExportOutline(outlineData.outline),
+      localdb_company_id: localdbCompanyId,
+      insert_localdb_images: insertLocaldbImages,
+      max_images_per_chapter: 4,
+      include_appendices: includeAppendices,
+    };
+  };
+
+  const handleComplianceCheck = async () => {
+    if (!outlineData) return;
+    setComplianceLoading(true);
+    setComplianceOpen(true);
+    setComplianceResult(null);
+    try {
+      const res = await documentApi.complianceCheck({
+        project_overview: projectOverview,
+        tech_requirements: techRequirements,
+        scoring_groups: scoringItems,
+        outline: outlineData.outline,
+      });
+      setComplianceResult(res.data);
+    } catch (e) {
+      setComplianceResult({
+        success: false,
+        message: getErrorMessage(e, '检查失败'),
+        passed: false,
+        risk_level: '高',
+        summary: '',
+        issues: [],
+        coverage_rate: 0,
+        uncovered_scoring_count: 0,
+      });
+    } finally {
+      setComplianceLoading(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    const exportPayload = buildExportPayload();
+    if (!exportPayload) return;
+    if (coverageSummary && coverageSummary.uncoveredCount > 0) {
+      const ok = window.confirm(
+        `仍有 ${coverageSummary.uncoveredCount} 项评分可能未覆盖，是否仍导出 PDF？`
+      );
+      if (!ok) return;
+    }
+    try {
+      setMessage(null);
+      const response = await documentApi.exportPdf(exportPayload);
+      const blob = await response.blob();
+      saveAs(blob, `${outlineData?.project_name || '标书文档'}.pdf`);
+      setMessage({ type: 'success', text: 'PDF 导出成功（需本机 LibreOffice）' });
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, 'PDF 导出失败') });
+    }
+  };
+
   // 导出Word文档
   const handleExportWord = async () => {
     if (!outlineData) return;
 
+    if (coverageSummary && coverageSummary.uncoveredCount > 0) {
+      const names = coverageSummary.uncovered
+        .slice(0, 5)
+        .map((g) => g.title)
+        .join('、');
+      const ok = window.confirm(
+        `仍有 ${coverageSummary.uncoveredCount} 项评分要求可能未在目录中覆盖（如：${names}）。是否仍要导出 Word？`
+      );
+      if (!ok) {
+        return;
+      }
+    }
+
     try {
       setMessage(null);
-      // 构建带有最新内容的导出数据（leafItems 中存的是实时内容）
-      const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
-        return items.map(item => {
-          const latestContent = getLatestContent(item);
-          const exportedItem: OutlineItem = {
-            ...item,
-            content: latestContent,
-          };
-          if (item.children && item.children.length > 0) {
-            exportedItem.children = buildExportOutline(item.children);
-          }
-          return exportedItem;
-        });
-      };
-
-      const exportPayload = {
-        project_name: outlineData.project_name,
-        project_overview: outlineData.project_overview,
-        outline: buildExportOutline(outlineData.outline),
-      };
+      const exportPayload = buildExportPayload();
+      if (!exportPayload) return;
 
       const response = await documentApi.exportWord(exportPayload);
       const blob = await response.blob();
       saveAs(blob, `${outlineData.project_name || '标书文档'}.docx`);
-      setMessage({ type: 'success', text: '导出成功' });
+      setMessage({
+        type: 'success',
+        text: exportTemplateReady
+          ? `导出成功（已套用模板${insertLocaldbImages ? '，资质类章节已尝试插图' : ''}）`
+          : `导出成功（默认版式${insertLocaldbImages ? '，资质类章节已尝试插图' : ''}）`,
+      });
     } catch (error) {
       setMessage({ type: 'error', text: getErrorMessage(error, '导出失败，请重试') });
     }
@@ -391,13 +529,62 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               <h2 className="text-lg font-semibold text-gray-900">标书内容</h2>
               <p className="text-sm text-gray-500 mt-1">
                 共 {leafItems.length} 个章节，已生成 {completedItems} 个
+                {exportTemplateReady && (
+                  <span className="ml-2 text-indigo-600">· 已配置导出模板</span>
+                )}
+                {coverageSummary && coverageSummary.total > 0 && (
+                  <span
+                    className={`ml-2 ${
+                      coverageSummary.uncoveredCount > 0 ? 'text-amber-600' : 'text-green-600'
+                    }`}
+                  >
+                    · 评分覆盖 {coverageSummary.coveredCount}/{coverageSummary.total}
+                  </span>
+                )}
                 {progress.failed.length > 0 && (
                   <span className="text-red-500 ml-2">失败 {progress.failed.length} 个</span>
                 )}
               </p>
             </div>
             
-            <div className="flex items-center space-x-3">
+            <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:gap-3">
+              <div className="flex flex-col items-end gap-1 text-sm text-gray-600">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <span className="whitespace-nowrap">全书目标字数（字）</span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={5000000}
+                    disabled={isGenerating}
+                    value={bookWordCountMin}
+                    onChange={(e) => {
+                      const v = Math.max(1000, parseInt(e.target.value, 10) || 1000);
+                      onBookWordCountRangeChange(v, bookWordCountMax);
+                    }}
+                    className="w-28 rounded border border-gray-300 px-2 py-1 text-gray-900 disabled:bg-gray-100"
+                    title="全书末级章节正文合计目标下限"
+                  />
+                  <span>～</span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={10000000}
+                    disabled={isGenerating}
+                    value={bookWordCountMax}
+                    onChange={(e) => {
+                      const v = Math.max(1000, parseInt(e.target.value, 10) || 1000);
+                      onBookWordCountRangeChange(bookWordCountMin, v);
+                    }}
+                    className="w-28 rounded border border-gray-300 px-2 py-1 text-gray-900 disabled:bg-gray-100"
+                    title="全书末级章节正文合计目标上限"
+                  />
+                </div>
+                {leafCount > 0 && (
+                  <span className="text-xs text-gray-500 max-w-xs text-right">
+                    共 {leafCount} 个末级章节，按全书目标均摊后每章约 {perChapterMin}～{perChapterMax} 字
+                  </span>
+                )}
+              </div>
               <button
                 onClick={handleGenerateContent}
                 disabled={isGenerating}
@@ -407,6 +594,40 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                 {isGenerating ? '生成中...' : '生成标书'}
               </button>
               
+              <label className="inline-flex items-center text-sm text-gray-600 mr-2">
+                <input
+                  type="checkbox"
+                  className="mr-1.5"
+                  checked={insertLocaldbImages}
+                  onChange={(e) => setInsertLocaldbImages(e.target.checked)}
+                />
+                插入资质图
+              </label>
+              <label className="inline-flex items-center text-sm text-gray-600 mr-2">
+                <input
+                  type="checkbox"
+                  className="mr-1.5"
+                  checked={includeAppendices}
+                  onChange={(e) => setIncludeAppendices(e.target.checked)}
+                />
+                附带附录
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleComplianceCheck()}
+                disabled={isGenerating}
+                className="inline-flex items-center px-3 py-2 border border-amber-300 text-sm font-medium rounded-md text-amber-800 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
+              >
+                合规检查
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExportPdf()}
+                disabled={isGenerating}
+                className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              >
+                导出 PDF
+              </button>
               <button
                 onClick={handleExportWord}
                 disabled={isGenerating}
@@ -505,6 +726,59 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         >
           <ArrowUpIcon className="w-5 h-5" />
         </button>
+      )}
+
+      {complianceOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/40"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-6">
+            <div className="flex justify-between items-start mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">合规终检</h3>
+              <button
+                type="button"
+                className="text-gray-400 hover:text-gray-600"
+                onClick={() => setComplianceOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            {complianceLoading && (
+              <p className="text-sm text-gray-500">正在分析，请稍候…</p>
+            )}
+            {complianceResult && !complianceLoading && (
+              <div className="space-y-3 text-sm">
+                <p
+                  className={
+                    complianceResult.passed ? 'text-green-700 font-medium' : 'text-red-700 font-medium'
+                  }
+                >
+                  {complianceResult.summary || complianceResult.message}
+                  （风险：{complianceResult.risk_level}，评分覆盖{' '}
+                  {Math.round((complianceResult.coverage_rate || 0) * 100)}%）
+                </p>
+                <ul className="space-y-2">
+                  {complianceResult.issues.map((issue, idx) => (
+                    <li
+                      key={idx}
+                      className="border border-gray-100 rounded p-2 bg-gray-50"
+                    >
+                      <span className="text-xs text-gray-500">
+                        [{issue.severity}] {issue.category}
+                      </span>
+                      <p className="mt-1 text-gray-800">{issue.message}</p>
+                      {issue.suggestion && (
+                        <p className="mt-1 text-gray-600 text-xs">建议：{issue.suggestion}</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -3,7 +3,8 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { collectSseText, documentApi, getErrorMessage } from '../services/api';
+import { collectSseText, documentApi, getErrorMessage, localDbApi } from '../services/api';
+import { TechnicalRequirementGroup } from '../types';
 import { CloudArrowUpIcon, DocumentIcon } from '@heroicons/react/24/outline';
 import { draftStorage } from '../utils/draftStorage';
 
@@ -13,18 +14,23 @@ interface DocumentAnalysisProps {
   fileContent: string;
   projectOverview: string;
   techRequirements: string;
+  activeCompanyId: string;
   onFileUpload: (content: string) => void;
   onAnalysisComplete: (overview: string, requirements: string) => void;
+  onScoringItemsUpdate: (items: TechnicalRequirementGroup[]) => void;
 }
 
 const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
   fileContent,
   projectOverview,
   techRequirements,
+  activeCompanyId,
   onFileUpload,
   onAnalysisComplete,
+  onScoringItemsUpdate,
 }) => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [syncToLocaldb, setSyncToLocaldb] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -137,11 +143,22 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       const response = await documentApi.uploadFile(file);
       
       if (response.data.success && response.data.file_content) {
-        // 上传新招标文件：清空上一轮 localStorage（按你的需求）
-        // 注意：这会同时清掉之前保存的草稿/正文内容缓存等
         draftStorage.clearAll();
         onFileUpload(response.data.file_content);
-        setMessage({ type: 'success', text: response.data.message });
+        let hint = response.data.message;
+        if (syncToLocaldb && activeCompanyId) {
+          try {
+            const dbRes = await localDbApi.uploadFile(activeCompanyId, file);
+            if (dbRes.data?.success) {
+              hint += '；已同步至本地库供章节检索';
+            } else {
+              hint += `；本地库同步失败：${dbRes.data?.message || '未知错误'}`;
+            }
+          } catch (syncErr) {
+            hint += `；本地库同步失败：${getErrorMessage(syncErr, '请求失败')}`;
+          }
+        }
+        setMessage({ type: 'success', text: hint });
       } else {
         setMessage({ type: 'error', text: response.data.message });
       }
@@ -206,7 +223,17 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       setEditingOverview(false);
       setEditingRequirements(false);
       onAnalysisComplete(finalOverview, finalRequirements);
-      setMessage({ type: 'success', text: '标书解析完成' });
+
+      try {
+        const scoringRes = await documentApi.extractScoringItems(finalRequirements);
+        if (scoringRes.data.success && scoringRes.data.groups?.length) {
+          onScoringItemsUpdate(scoringRes.data.groups);
+        }
+      } catch {
+        // 评分项提取失败不阻断主流程
+      }
+
+      setMessage({ type: 'success', text: '标书解析完成（已尝试提取评分项）' });
       
       // 清空流式内容
       resetStreamingPreview();
@@ -259,18 +286,27 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
               {uploadedFile ? uploadedFile.name : '点击选择文件或拖拽文件到这里'}
             </p>
             <p className="text-sm text-gray-500 mt-2">
-              支持 PDF 和 Word 文档，最大 100MB
+              支持 PDF、Word、WPS 等，最大 100MB
             </p>
+            <label className="mt-4 inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={syncToLocaldb}
+                onChange={(e) => setSyncToLocaldb(e.target.checked)}
+                onClick={(e) => e.stopPropagation()}
+              />
+              同时存入本地库（供正文生成时 RAG 检索）
+            </label>
           </div>
+        </div>
           
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.doc"
+            accept=".pdf,.doc,.docx,.wps,.wpt,.rtf,.odt,.txt,.md"
             onChange={handleFileSelect}
             className="hidden"
           />
-        </div>
         
         {uploading && (
           <div className="mt-4 text-center">

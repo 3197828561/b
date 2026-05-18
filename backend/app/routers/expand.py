@@ -21,7 +21,7 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         if not FileService.is_supported_document(file.content_type, file.filename):
             return FileUploadResponse(
-                success=False, message="不支持的文件类型，请上传PDF或Word文档"
+                success=False, message=FileService.SUPPORTED_DOCUMENTS_MESSAGE
             )
 
         file_content = await FileService.process_uploaded_file(file)
